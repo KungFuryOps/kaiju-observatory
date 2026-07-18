@@ -1,0 +1,23 @@
+{
+  "name": "kaiju-observatory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Privacy-conscious structural inspector for allowlisted ranking pages.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "inspect:rankings": "tsx src/inspect-rankings.ts",
+    "test": "tsx --test src/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "cheerio": "1.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.0",
+    "tsx": "4.22.4",
+    "typescript": "5.9.3"
+  }
+}

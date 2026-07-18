@@ -1,0 +1,60 @@
+name: Inspect configured source
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Inspection profile
+        required: true
+        type: choice
+        default: landing
+        options:
+          - landing
+          - series-a
+          - series-b
+          - series-c
+      follow_entry:
+        description: Follow and summarize at most one direct entry link
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inspect-configured-source
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    name: Redacted source inspection
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: source-inspection
+    env:
+      INSPECT_PROFILE: ${{ inputs.profile }}
+      INSPECT_FOLLOW_ENTRY: ${{ inputs.follow_entry }}
+      KAIJU_SOURCE_ORIGIN: ${{ secrets.KAIJU_SOURCE_ORIGIN }}
+      KAIJU_SOURCE_PATH: ${{ secrets.KAIJU_SOURCE_PATH }}
+      KAIJU_SOURCE_SCHEMA: ${{ secrets.KAIJU_SOURCE_SCHEMA }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Inspect allowlisted source
+        run: >-
+          npm run inspect:rankings --
+          --profile="$INSPECT_PROFILE"
+          --follow-entry="$INSPECT_FOLLOW_ENTRY"
