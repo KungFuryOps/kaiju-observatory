@@ -1,0 +1,72 @@
+name: Run configured pipeline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: configured-pipeline
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Run protected operation
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: configured-pipeline
+    steps:
+      - name: Validate protected configuration
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ secrets.KAIJU_TARGET_REPOSITORY }}
+          TARGET_SSH_KEY: ${{ secrets.KAIJU_TARGET_SSH_KEY }}
+          PIPELINE_COMMAND: ${{ secrets.KAIJU_PIPELINE_COMMAND }}
+          PIPELINE_DATASTORE_URL: ${{ secrets.KAIJU_DATASTORE_URL }}
+        run: |
+          set -euo pipefail
+          for variable in TARGET_REPOSITORY TARGET_SSH_KEY PIPELINE_COMMAND PIPELINE_DATASTORE_URL; do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "::error::Protected pipeline configuration is incomplete."
+              exit 1
+            fi
+          done
+
+      - name: Checkout configured target
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: ${{ secrets.KAIJU_TARGET_REPOSITORY }}
+          ssh-key: ${{ secrets.KAIJU_TARGET_SSH_KEY }}
+          persist-credentials: false
+          path: target
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+
+      - name: Run configured operation
+        shell: bash
+        working-directory: target
+        env:
+          CI: "true"
+          DATABASE_URL: ${{ secrets.KAIJU_DATASTORE_URL }}
+          PIPELINE_COMMAND: ${{ secrets.KAIJU_PIPELINE_COMMAND }}
+        run: |
+          set -euo pipefail
+          dependency_log="$RUNNER_TEMP/dependencies.log"
+          pipeline_log="$RUNNER_TEMP/pipeline.log"
+          trap 'rm -f "$dependency_log" "$pipeline_log"' EXIT
+
+          if ! npm ci --no-audit --no-fund > "$dependency_log" 2>&1; then
+            echo "::error::Dependency setup failed. Details were intentionally withheld."
+            exit 1
+          fi
+
+          if ! bash -euo pipefail -c "$PIPELINE_COMMAND" > "$pipeline_log" 2>&1; then
+            echo "::error::Configured pipeline failed. Details were intentionally withheld."
+            exit 1
+          fi
+
+          echo "Configured pipeline completed."
