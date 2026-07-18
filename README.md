@@ -24,7 +24,8 @@ route names, query keys, query values, and JavaScript calls are redacted.
 
 Open **Actions > Inspect configured source > Run workflow**, select a profile,
 and choose whether to follow at most one direct entry link. `landing` inspects
-the initial page; the `series-*` profiles inspect privately configured views.
+the initial page; the `series-*` profiles inspect privately configured views;
+`correlation` compares their opaque source identities and emits counts only.
 
 The workflow uses a standard GitHub-hosted runner with read-only repository
 permissions, no persisted checkout credentials, and a five-minute timeout.

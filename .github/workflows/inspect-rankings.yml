@@ -14,6 +14,7 @@ on:
           - series-b
           - series-c
           - series-d
+          - correlation
       follow_entry:
         description: Follow and summarize at most one direct entry link
         required: true
