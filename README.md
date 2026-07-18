@@ -14,11 +14,15 @@ route names, query keys, query values, and JavaScript calls are redacted.
   environment.
 - A small set of fixed, generic inspection profiles.
 - One source request per run and, optionally, one same-origin detail request.
-- No database connection, production credentials, personal identifiers, or writes.
 - No arbitrary URL input and no general-purpose proxy behavior.
 - Pull requests run synthetic tests only. Live inspection requires collaborator
   access and the protected environment.
 - Results are printed as redacted workflow logs; raw responses are not retained.
+- A separate manual workflow may run one command from a privately configured
+  repository. Its target, read-only key, command, and datastore connection are
+  encrypted environment secrets.
+- Private command output is withheld, stored only in temporary runner files,
+  and deleted without being uploaded as an artifact.
 
 ## GitHub Actions
 
@@ -30,6 +34,11 @@ the initial page; the `series-*` profiles inspect privately configured views;
 The workflow uses a standard GitHub-hosted runner with read-only repository
 permissions, no persisted checkout credentials, and a five-minute timeout.
 
+**Run configured pipeline** is a separate collaborator-only operation with no
+public inputs. It checks out its protected target with a read-only deploy key,
+runs the configured command, and reports only a generic success or failure.
+The environment is restricted to the protected default branch.
+
 ## Local development
 
 Local development uses synthetic fixtures and does not require network access:
@@ -40,8 +49,10 @@ npm test
 npm run typecheck
 ```
 
-Live source settings are intentionally absent from the repository. They belong
-in the `source-inspection` GitHub environment as encrypted secrets.
+Live settings are intentionally absent from the repository. Inspection settings
+belong in `source-inspection`; private pipeline settings belong in
+`configured-pipeline`. Both are GitHub environments containing encrypted
+secrets.
 
 ## Responsible use
 
