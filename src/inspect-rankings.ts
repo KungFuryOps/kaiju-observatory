@@ -40,6 +40,34 @@ interface RankingEntrySummary {
   attributeNames: string[];
 }
 
+interface CorrelationEntry {
+  normalizedName: string;
+  sourceId: string | null;
+  sourceRecord: string | null;
+}
+
+interface ProfileCorrelationSummary {
+  rows: number;
+  distinctNames: number;
+  distinctSourceIds: number;
+  distinctSourceRecords: number;
+  rowsWithoutSourceId: number;
+  duplicateNameGroups: number;
+  namesWithMultipleSourceIds: number;
+  sourceIdsWithMultipleNames: number;
+}
+
+interface ProfileCorrelationPair {
+  left: string;
+  right: string;
+  sharedNames: number;
+  sharedSourceIds: number;
+  sharedSourceRecords: number;
+  sharedNameAndSourceIdPairs: number;
+  sharedNamesWithoutCommonSourceId: number;
+  sharedSourceIdsWithoutCommonName: number;
+}
+
 const SYNTHETIC_TABLE_SCHEMA: TableSchema = {
   requiredHeaders: ["Rank", "Participant", "Score"],
   entryHeader: "Participant",
@@ -222,6 +250,168 @@ function normalizedName(value: string): string {
     .trim();
 }
 
+function sourceKeys(href: string, sourceOrigin: string): {
+  sourceId: string | null;
+  sourceRecord: string | null;
+} {
+  if (!isFollowableSourceHref(href, sourceOrigin)) {
+    return { sourceId: null, sourceRecord: null };
+  }
+  const url = new URL(href, `${sourceOrigin}/`);
+  const values = Array.from(url.searchParams.values()).filter(Boolean);
+  return {
+    sourceId: values.length === 1 ? (values[0] ?? null) : null,
+    sourceRecord: values.length > 0 ? `${url.pathname}?${values.join("&")}` : null,
+  };
+}
+
+function extractCorrelationEntries(
+  html: string,
+  tableSchema: TableSchema,
+  sourceOrigin: string,
+): CorrelationEntry[] {
+  const $ = cheerio.load(html);
+  const table = $("table").toArray().find((candidate) => {
+    const headers = $(candidate).find("tr").first().find("td, th").toArray()
+      .map((cell) => clean($(cell).text()));
+    return tableSchema.requiredHeaders.every((header) => headers.includes(header));
+  });
+  if (!table) return [];
+
+  const headers = $(table).find("tr").first().find("td, th").toArray()
+    .map((cell) => clean($(cell).text()));
+  const entryIndex = headers.indexOf(tableSchema.entryHeader);
+  if (entryIndex < 0) return [];
+  const emptyEntryText = normalizedName(tableSchema.emptyEntryText ?? "");
+
+  return $(table).find("tr").slice(1).toArray().flatMap((row) => {
+    const cell = $(row).find("td, th").toArray()[entryIndex];
+    if (!cell) return [];
+    const name = clean($(cell).text());
+    if (!name || (emptyEntryText && normalizedName(name).includes(emptyEntryText))) return [];
+    const href = $(cell).find("a[href]").first().attr("href") ?? "";
+    return [{ normalizedName: normalizedName(name), ...sourceKeys(href, sourceOrigin) }];
+  });
+}
+
+function valuesByKey(
+  entries: CorrelationEntry[],
+  key: "normalizedName" | "sourceId",
+  value: "normalizedName" | "sourceId",
+): Map<string, Set<string>> {
+  const result = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    const keyValue = entry[key];
+    const mappedValue = entry[value];
+    if (!keyValue || !mappedValue) continue;
+    const values = result.get(keyValue) ?? new Set<string>();
+    values.add(mappedValue);
+    result.set(keyValue, values);
+  }
+  return result;
+}
+
+function intersectionSize(left: Set<string>, right: Set<string>): number {
+  let matches = 0;
+  for (const value of left) if (right.has(value)) matches++;
+  return matches;
+}
+
+function profileCorrelationSummary(entries: CorrelationEntry[]): ProfileCorrelationSummary {
+  const nameCounts = new Map<string, number>();
+  const namesToIds = valuesByKey(entries, "normalizedName", "sourceId");
+  const idsToNames = valuesByKey(entries, "sourceId", "normalizedName");
+  const sourceIds = new Set<string>();
+  const sourceRecords = new Set<string>();
+  let rowsWithoutSourceId = 0;
+
+  for (const entry of entries) {
+    nameCounts.set(entry.normalizedName, (nameCounts.get(entry.normalizedName) ?? 0) + 1);
+    if (entry.sourceId) sourceIds.add(entry.sourceId);
+    else rowsWithoutSourceId++;
+    if (entry.sourceRecord) sourceRecords.add(entry.sourceRecord);
+  }
+
+  return {
+    rows: entries.length,
+    distinctNames: nameCounts.size,
+    distinctSourceIds: sourceIds.size,
+    distinctSourceRecords: sourceRecords.size,
+    rowsWithoutSourceId,
+    duplicateNameGroups: Array.from(nameCounts.values()).filter((count) => count > 1).length,
+    namesWithMultipleSourceIds: Array.from(namesToIds.values()).filter((ids) => ids.size > 1).length,
+    sourceIdsWithMultipleNames: Array.from(idsToNames.values()).filter((names) => names.size > 1).length,
+  };
+}
+
+export function summarizeProfileCorrelation(
+  profileHtml: Record<string, string>,
+  tableSchema: TableSchema = SYNTHETIC_TABLE_SCHEMA,
+  sourceOrigin = SYNTHETIC_ORIGIN,
+): {
+  profiles: Record<string, ProfileCorrelationSummary>;
+  pairs: ProfileCorrelationPair[];
+} {
+  const entriesByProfile: Record<string, CorrelationEntry[]> = Object.fromEntries(
+    Object.entries(profileHtml)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([profile, html]) => [profile, extractCorrelationEntries(html, tableSchema, sourceOrigin)]),
+  );
+  const profiles = Object.fromEntries(
+    Object.entries(entriesByProfile).map(([profile, entries]) => [
+      profile,
+      profileCorrelationSummary(entries),
+    ]),
+  );
+  const pairs: ProfileCorrelationPair[] = [];
+  const profileNames = Object.keys(entriesByProfile);
+
+  for (let leftIndex = 0; leftIndex < profileNames.length; leftIndex++) {
+    for (let rightIndex = leftIndex + 1; rightIndex < profileNames.length; rightIndex++) {
+      const left = profileNames[leftIndex];
+      const right = profileNames[rightIndex];
+      if (!left || !right) continue;
+      const leftEntries = entriesByProfile[left] ?? [];
+      const rightEntries = entriesByProfile[right] ?? [];
+      const leftNamesToIds = valuesByKey(leftEntries, "normalizedName", "sourceId");
+      const rightNamesToIds = valuesByKey(rightEntries, "normalizedName", "sourceId");
+      const leftIdsToNames = valuesByKey(leftEntries, "sourceId", "normalizedName");
+      const rightIdsToNames = valuesByKey(rightEntries, "sourceId", "normalizedName");
+      const leftNames = new Set(leftEntries.map((entry) => entry.normalizedName));
+      const rightNames = new Set(rightEntries.map((entry) => entry.normalizedName));
+      const leftIds = new Set(leftEntries.flatMap((entry) => entry.sourceId ? [entry.sourceId] : []));
+      const rightIds = new Set(rightEntries.flatMap((entry) => entry.sourceId ? [entry.sourceId] : []));
+      const leftRecords = new Set(leftEntries.flatMap((entry) => entry.sourceRecord ? [entry.sourceRecord] : []));
+      const rightRecords = new Set(rightEntries.flatMap((entry) => entry.sourceRecord ? [entry.sourceRecord] : []));
+      const leftNameIds = new Set(leftEntries.flatMap((entry) => (
+        entry.sourceId ? [`${entry.normalizedName}\u0000${entry.sourceId}`] : []
+      )));
+      const rightNameIds = new Set(rightEntries.flatMap((entry) => (
+        entry.sourceId ? [`${entry.normalizedName}\u0000${entry.sourceId}`] : []
+      )));
+      const sharedNames = Array.from(leftNames).filter((name) => rightNames.has(name));
+      const sharedIds = Array.from(leftIds).filter((id) => rightIds.has(id));
+
+      pairs.push({
+        left,
+        right,
+        sharedNames: sharedNames.length,
+        sharedSourceIds: sharedIds.length,
+        sharedSourceRecords: intersectionSize(leftRecords, rightRecords),
+        sharedNameAndSourceIdPairs: intersectionSize(leftNameIds, rightNameIds),
+        sharedNamesWithoutCommonSourceId: sharedNames.filter((name) => (
+          intersectionSize(leftNamesToIds.get(name) ?? new Set(), rightNamesToIds.get(name) ?? new Set()) === 0
+        )).length,
+        sharedSourceIdsWithoutCommonName: sharedIds.filter((id) => (
+          intersectionSize(leftIdsToNames.get(id) ?? new Set(), rightIdsToNames.get(id) ?? new Set()) === 0
+        )).length,
+      });
+    }
+  }
+
+  return { profiles, pairs };
+}
+
 export function summarizeRankingEntries(
   html: string,
   tableSchema: TableSchema = SYNTHETIC_TABLE_SCHEMA,
@@ -398,6 +588,32 @@ async function main(): Promise<void> {
 
   const location = sourceLocationFromEnv();
   const schema = sourceSchemaFromEnv();
+
+  if (options.profile === "correlation") {
+    const profiles = Object.keys(schema.profiles).sort();
+    if (profiles.length < 2 || profiles.length > 8) {
+      throw new Error("The configured correlation profile count is invalid");
+    }
+    console.log("Inspecting configured ranking source");
+    console.log("request:", JSON.stringify({
+      method: "BATCH_POST",
+      profile: options.profile,
+      profileCount: profiles.length,
+      followEntry: false,
+    }, null, 2));
+
+    const profileHtml: Record<string, string> = {};
+    for (const profile of profiles) {
+      profileHtml[profile] = await postSourceForm(location, profileForm(schema, profile));
+    }
+    console.log("correlation:", JSON.stringify(
+      summarizeProfileCorrelation(profileHtml, schema.table, location.origin),
+      null,
+      2,
+    ));
+    return;
+  }
+
   const method = options.profile === "landing" ? "GET" : "POST";
   const form = method === "POST" ? profileForm(schema, options.profile) : {};
 

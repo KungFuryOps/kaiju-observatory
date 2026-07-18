@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hrefShape, summarizeEntryDetail, summarizeRankingEntries } from "./inspect-rankings.js";
+import {
+  hrefShape,
+  summarizeEntryDetail,
+  summarizeProfileCorrelation,
+  summarizeRankingEntries,
+} from "./inspect-rankings.js";
 
 test("summarizes ranking entries without exposing identities or route names", () => {
   const html = `
@@ -64,6 +69,68 @@ test("summarizes an entry page while redacting fields, labels, and links", () =>
 
   const serialized = JSON.stringify(summary);
   assert.doesNotMatch(serialized, /ALICE|Current season|person|search|result|event|match|group/i);
+});
+
+test("correlates source identities across profiles without exposing raw values", () => {
+  const profileHtml = {
+    "series-a": `
+      <table>
+        <tr><th>Rank</th><th>Participant</th><th>Score</th></tr>
+        <tr><td>1</td><td><a href="entry?id=101">ALICE EXAMPLE</a></td><td>10</td></tr>
+        <tr><td>2</td><td><a href="entry?id=201">DUPLICATE PERSON</a></td><td>9</td></tr>
+        <tr><td>3</td><td><a href="entry?id=202">DUPLICATE PERSON</a></td><td>8</td></tr>
+        <tr><td>4</td><td>ONLY LEFT</td><td>7</td></tr>
+      </table>
+    `,
+    "series-b": `
+      <table>
+        <tr><th>Rank</th><th>Participant</th><th>Score</th></tr>
+        <tr><td>1</td><td><a href="member?id=101">ALICE EXAMPLE</a></td><td>10</td></tr>
+        <tr><td>2</td><td><a href="member?id=203">DUPLICATE PERSON</a></td><td>9</td></tr>
+        <tr><td>3</td><td><a href="member?id=202">BOB EXAMPLE</a></td><td>8</td></tr>
+      </table>
+    `,
+  };
+
+  const summary = summarizeProfileCorrelation(profileHtml);
+  assert.deepEqual(summary, {
+    profiles: {
+      "series-a": {
+        rows: 4,
+        distinctNames: 3,
+        distinctSourceIds: 3,
+        distinctSourceRecords: 3,
+        rowsWithoutSourceId: 1,
+        duplicateNameGroups: 1,
+        namesWithMultipleSourceIds: 1,
+        sourceIdsWithMultipleNames: 0,
+      },
+      "series-b": {
+        rows: 3,
+        distinctNames: 3,
+        distinctSourceIds: 3,
+        distinctSourceRecords: 3,
+        rowsWithoutSourceId: 0,
+        duplicateNameGroups: 0,
+        namesWithMultipleSourceIds: 0,
+        sourceIdsWithMultipleNames: 0,
+      },
+    },
+    pairs: [{
+      left: "series-a",
+      right: "series-b",
+      sharedNames: 2,
+      sharedSourceIds: 2,
+      sharedSourceRecords: 0,
+      sharedNameAndSourceIdPairs: 1,
+      sharedNamesWithoutCommonSourceId: 1,
+      sharedSourceIdsWithoutCommonName: 1,
+    }],
+  });
+  assert.doesNotMatch(
+    JSON.stringify(summary),
+    /ALICE EXAMPLE|BOB EXAMPLE|DUPLICATE PERSON|"entry"|"member"|101|201|202|203/i,
+  );
 });
 
 test("classifies external URLs and redacts path and script identifiers", () => {
